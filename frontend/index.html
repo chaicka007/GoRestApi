@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Task Manager</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; background: #f9f9f9; }
+        h1 { color: #333; }
+        .task { border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; background: #fff; }
+        .task.completed { background: #e0ffe0; }
+        .task.in_progress { background: #ffffe0; }
+        .task.pending { background: #ffe0e0; }
+        .task button { margin-left: 5px; }
+    </style>
+</head>
+<body>
+
+<h1>Задачи</h1>
+
+<label>Фильтр по статусу:
+    <select id="statusFilter">
+        <option value="">Все</option>
+        <option value="pending">В ожидании</option>
+        <option value="in_progress">В процессе</option>
+        <option value="completed">Завершено</option>
+    </select>
+</label>
+
+<div id="taskList"></div>
+
+<h2>Добавить задачу</h2>
+<form id="taskForm">
+    <input type="text" id="title" placeholder="Заголовок" required>
+    <input type="text" id="description" placeholder="Описание">
+    <select id="status">
+        <option value="pending">В ожидании</option>
+        <option value="in_progress">В процессе</option>
+        <option value="completed">Завершено</option>
+    </select>
+    <button type="submit">Добавить</button>
+</form>
+
+<script>
+    const API_URL = 'http://localhost:8080';
+
+    async function fetchTasks(status = '') {
+        let url = `${API_URL}/tasks`;
+        if (status) url += `?status=${status}`;
+
+        const res = await fetch(url);
+        const tasks = await res.json();
+        renderTasks(tasks);
+    }
+
+    function renderTasks(tasks) {
+        const list = document.getElementById('taskList');
+        list.innerHTML = '';
+        tasks.forEach(task => {
+            const div = document.createElement('div');
+            div.className = `task ${task.status}`;
+            div.innerHTML = `
+          <strong>#${task.id}</strong> — <strong>${task.title}</strong> <em>(${task.status})</em><br>
+          ${task.description || ''}<br>
+          <button onclick="deleteTask(${task.id})">Удалить</button>
+        `;
+            list.appendChild(div);
+        });
+    }
+
+    async function deleteTask(id) {
+        if (!confirm('Удалить задачу?')) return;
+        await fetch(`${API_URL}/tasks/${id}`, { method: 'DELETE' });
+        fetchTasks(document.getElementById('statusFilter').value);
+    }
+
+    document.getElementById('taskForm').addEventListener('submit', async e => {
+        e.preventDefault();
+        const title = document.getElementById('title').value;
+        const description = document.getElementById('description').value;
+        const status = document.getElementById('status').value;
+
+        await fetch(`${API_URL}/tasks`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title, description, status })
+        });
+
+        e.target.reset();
+        fetchTasks(document.getElementById('statusFilter').value);
+    });
+
+    document.getElementById('statusFilter').addEventListener('change', e => {
+        fetchTasks(e.target.value);
+    });
+
+    fetchTasks();
+</script>
+
+</body>
+</html>
