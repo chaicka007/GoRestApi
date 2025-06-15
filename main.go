@@ -3,6 +3,7 @@ package main
 import (
 	"RestApi/database"
 	"RestApi/handlers"
+	"RestApi/storage"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 
@@ -20,18 +21,18 @@ import (
 
 func main() {
 	database.InitDB()
-
 	r := gin.Default()
+	h := handlers.NewTaskHandler(storage.NewTaskStorage())
 
 	r.Use(cors.Default())
 
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
-	r.GET("/tasks", handlers.GetTasks)
-	r.GET("/tasks/:id", handlers.GetTaskByID)
-	r.POST("/tasks", handlers.CreateTask)
-	r.PUT("/tasks/:id", handlers.UpdateTask)
-	r.DELETE("/tasks/:id", handlers.DeleteTask)
+	r.GET("/tasks", h.GetTasks)
+	r.GET("/tasks/:id", h.GetTaskByID)
+	r.POST("/tasks", h.CreateTask)
+	r.PUT("/tasks/:id", h.UpdateTask)
+	r.DELETE("/tasks/:id", h.DeleteTask)
 
 	r.Run(":8080")
 }

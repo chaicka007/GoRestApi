@@ -1,14 +1,22 @@
 package handlers
 
 import (
-	"RestApi/database"
 	"RestApi/models"
+	"RestApi/storage"
 	"database/sql"
 	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
+
+type TaskHandler struct {
+	Storage *storage.TaskStorage
+}
+
+func NewTaskHandler(storage *storage.TaskStorage) *TaskHandler {
+	return &TaskHandler{Storage: storage}
+}
 
 // GetTasks godoc
 // @Summary Получить список задач
@@ -18,38 +26,16 @@ import (
 // @Produce json
 // @Param status query string false "Фильтр по статусу: pending, in_progress, completed"
 // @Success 200 {array} models.Task
+// @Failure 400 {object} models.ErrorResponse
 // @Failure 500 {object} models.ErrorResponse
 // @Router /tasks [get]
-func GetTasks(c *gin.Context) {
+func (h *TaskHandler) GetTasks(c *gin.Context) {
 	status := c.Query("status")
 
-	var rows *sql.Rows
-	var err error
-
-	if status != "" {
-		if !models.IsValidStatus(status) {
-			c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Недопустимый фильтр статуса"})
-			return
-		}
-		rows, err = database.DB.Query("SELECT id, title, description, status FROM tasks WHERE status = $1", status)
-	} else {
-		rows, err = database.DB.Query("SELECT id, title, description, status FROM tasks")
-	}
-
+	tasks, err := h.Storage.GetAll(status)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Ошибка при получении задач"})
 		return
-	}
-	defer rows.Close()
-
-	var tasks []models.Task
-	for rows.Next() {
-		var t models.Task
-		if err := rows.Scan(&t.ID, &t.Title, &t.Description, &t.Status); err != nil {
-			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Ошибка при обработке данных"})
-			return
-		}
-		tasks = append(tasks, t)
 	}
 	c.JSON(http.StatusOK, tasks)
 }
@@ -64,19 +50,23 @@ func GetTasks(c *gin.Context) {
 // @Failure 400 {object} models.ErrorResponse
 // @Failure 404 {object} models.ErrorResponse
 // @Router /tasks/{id} [get]
-func GetTaskByID(c *gin.Context) {
-	id := c.Param("id")
-	var t models.Task
-	err := database.DB.QueryRow("SELECT id, title, description FROM tasks WHERE id = $1", id).
-		Scan(&t.ID, &t.Title, &t.Description, &t.Status)
-	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, models.ErrorResponse{Message: "Задача не найдена"})
+func (h *TaskHandler) GetTaskByID(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Некорректный ID"})
 		return
-	} else if err != nil {
+	}
+
+	task, err := h.Storage.GetByID(id)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Ошибка при получении задачи"})
 		return
 	}
-	c.JSON(http.StatusOK, t)
+	if task == nil {
+		c.JSON(http.StatusNotFound, models.ErrorResponse{Message: "Задача не найдена"})
+		return
+	}
+	c.JSON(http.StatusOK, task)
 }
 
 // CreateTask godoc
@@ -89,29 +79,23 @@ func GetTaskByID(c *gin.Context) {
 // @Failure 400 {object} models.ErrorResponse
 // @Failure 500 {object} models.ErrorResponse
 // @Router /tasks [post]
-func CreateTask(c *gin.Context) {
-	var t models.Task
-	if err := c.ShouldBindJSON(&t); err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Неверный формат JSON"})
+func (h *TaskHandler) CreateTask(c *gin.Context) {
+	var task models.Task
+	if err := c.ShouldBindJSON(&task); err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Неверные данные"})
 		return
 	}
-	if t.Title == "" {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Заголовок задачи не может быть пустым"})
+
+	if task.Title == "" {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Название задачи не может быть пустым"})
 		return
 	}
-	if t.Status == "" {
-		t.Status = models.StatusPending
-	} else if !models.IsValidStatus(t.Status) {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Недопустимый статус задачи"})
-		return
-	}
-	err := database.DB.QueryRow("INSERT INTO tasks (title, description,status) VALUES ($1, $2, $3) RETURNING id",
-		t.Title, t.Description, t.Status).Scan(&t.ID)
-	if err != nil {
+
+	if err := h.Storage.Create(&task); err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Ошибка при создании задачи"})
 		return
 	}
-	c.JSON(http.StatusCreated, t)
+	c.JSON(http.StatusCreated, task)
 }
 
 // UpdateTask godoc
@@ -126,31 +110,35 @@ func CreateTask(c *gin.Context) {
 // @Failure 404 {object} models.ErrorResponse
 // @Failure 500 {object} models.ErrorResponse
 // @Router /tasks/{id} [put]
-func UpdateTask(c *gin.Context) {
-	id := c.Param("id")
-	var t models.Task
-	if err := c.ShouldBindJSON(&t); err != nil {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Неверный формат JSON"})
-		return
-	}
-	if !models.IsValidStatus(t.Status) {
-		c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Недопустимый статус задачи"})
+func (h *TaskHandler) UpdateTask(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Некорректный ID"})
 		return
 	}
 
-	res, err := database.DB.Exec("UPDATE tasks SET title=$1, description=$2, status=$3 WHERE id=$4",
-		t.Title, t.Description, t.Status, id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Ошибка при обновлении задачи"})
+	var task models.Task
+	if err := c.ShouldBindJSON(&task); err != nil {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Неверные данные"})
 		return
 	}
-	rows, _ := res.RowsAffected()
-	if rows == 0 {
-		c.JSON(http.StatusNotFound, models.ErrorResponse{Message: "Задача не найдена"})
+
+	if task.Title == "" {
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Название задачи не может быть пустым"})
 		return
 	}
-	t.ID, _ = strconv.Atoi(id)
-	c.JSON(http.StatusOK, t)
+
+	if err := h.Storage.Update(id, &task); err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, models.ErrorResponse{Message: "Задача не найдена"})
+		} else {
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Ошибка при обновлении задачи"})
+		}
+		return
+	}
+
+	task.ID = id
+	c.JSON(http.StatusOK, task)
 }
 
 // DeleteTask godoc
@@ -164,17 +152,20 @@ func UpdateTask(c *gin.Context) {
 // @Failure 404 {object} models.ErrorResponse
 // @Failure 500 {object} models.ErrorResponse
 // @Router /tasks/{id} [delete]
-func DeleteTask(c *gin.Context) {
-	id := c.Param("id")
-	res, err := database.DB.Exec("DELETE FROM tasks WHERE id = $1", id)
+func (h *TaskHandler) DeleteTask(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Ошибка при удалении задачи"})
+		c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Некорректный ID"})
 		return
 	}
-	rows, _ := res.RowsAffected()
-	if rows == 0 {
-		c.JSON(http.StatusNotFound, models.ErrorResponse{Message: "Задача не найдена"})
+
+	if err := h.Storage.Delete(id); err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, models.ErrorResponse{Message: "Задача не найдена"})
+		} else {
+			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Ошибка при удалении задачи"})
+		}
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "Задача удалена"})
+	c.Status(http.StatusNoContent)
 }
